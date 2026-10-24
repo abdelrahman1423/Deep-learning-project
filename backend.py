@@ -3,38 +3,35 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 import os
+from data_cleaning import prepare_penguin_data
 
 
 def perceptron_backend(feature_1, feature_2, class_1, class_2, eta, epochs, mse_threshold, use_bias, sample_f1, sample_f2):
 
-    # ===================== Load and Clean Data =====================
+    # ===================== Load Cleaned Data =====================
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    df = pd.read_csv(os.path.join(script_dir, "penguins.csv"))
+    raw_path = os.path.join(script_dir, "penguins.csv")
+    ready_path = os.path.join(script_dir, "Ready_penguins.csv")
 
-    df["Species"] = df["Species"].fillna(df["Species"].mode()[0])
-    df["OriginLocation"] = df["OriginLocation"].fillna(df["OriginLocation"].mode()[0])
+    if not os.path.exists(ready_path):
+        prepare_penguin_data(raw_path, ready_path)
 
-    num_cols = ["CulmenLength", "CulmenDepth", "FlipperLength", "BodyMass"]
-    for col in num_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-        df[col] = df.groupby("Species")[col].transform(lambda x: x.fillna(x.mean()))
+    df = pd.read_csv(ready_path)
+    raw_df = pd.read_csv(raw_path)
 
-    # ===================== Encode OriginLocation =====================
-    location_mapping = {"Torgersen": 0, "Biscoe": 1, "Dream": 2}
-    df["OriginLocation"] = df["OriginLocation"].map(location_mapping).astype(float)
+    # ===================== Species Codes and OriginLocation =====================
+    species_codes = {"Adelie": 0, "Chinstrap": 1, "Gentoo": 2}
+
+    location_values = {"Torgersen": 0.0, "Biscoe": 0.5, "Dream": 1.0}
+    df["OriginLocation"] = df["OriginLocation_Biscoe"] * 0.5 + df["OriginLocation_Dream"] * 1.0
 
     # ===================== Filter Classes and Extract Features =====================
-    df = df[df["Species"].isin([class_1, class_2])].reset_index(drop=True)
+    code_1 = species_codes[class_1]
+    code_2 = species_codes[class_2]
+    df = df[df["Species"].isin([code_1, code_2])].reset_index(drop=True)
 
     X = df[[feature_1, feature_2]].values.astype(float)
-    y = np.array([1 if s == class_1 else -1 for s in df["Species"]])
-
-    # ===================== Normalize Features =====================
-    min_vals = X.min(axis=0)
-    max_vals = X.max(axis=0)
-    ranges = max_vals - min_vals
-    ranges[ranges == 0] = 1
-    X = (X - min_vals) / ranges
+    y = np.array([1 if s == code_1 else -1 for s in df["Species"]])
 
     # ===================== Split Train / Test =====================
     class1_indices = np.where(y == 1)[0]
@@ -45,6 +42,7 @@ def perceptron_backend(feature_1, feature_2, class_1, class_2, eta, epochs, mse_
 
     train_indices = np.concatenate([class1_indices[:30], class2_indices[:30]])
     test_indices = np.concatenate([class1_indices[30:], class2_indices[30:]])
+    np.random.shuffle(train_indices)
 
     X_train = X[train_indices]
     y_train = y[train_indices]
@@ -125,6 +123,10 @@ def perceptron_backend(feature_1, feature_2, class_1, class_2, eta, epochs, mse_
         x_line = np.linspace(X[:, 0].min() - 0.1, X[:, 0].max() + 0.1, 200)
         y_line = -(weights[0] * x_line + bias) / weights[1]
         ax.plot(x_line, y_line, "g-", linewidth=2, label="Decision Boundary")
+    elif abs(weights[0]) > 0.0001:
+        ax.axvline(x=-bias / weights[0], color="g", linewidth=2, label="Decision Boundary")
+
+    ax.set_ylim(X[:, 1].min() - 0.1, X[:, 1].max() + 0.1)
 
     ax.scatter([], [], c="blue", marker="o", label=f"{class_1} (train)")
     ax.scatter([], [], c="red", marker="o", label=f"{class_2} (train)")
@@ -150,15 +152,16 @@ def perceptron_backend(feature_1, feature_2, class_1, class_2, eta, epochs, mse_
     st.write(f"**Overall Accuracy: {accuracy:.2f}%**")
 
     # ===================== Classify New Sample =====================
-    if feature_1 == "OriginLocation":
-        sample_f1 = location_mapping.get(sample_f1, 0)
-    if feature_2 == "OriginLocation":
-        sample_f2 = location_mapping.get(sample_f2, 0)
+    sample_values = []
+    for feature, value in [(feature_1, sample_f1), (feature_2, sample_f2)]:
+        if feature == "OriginLocation":
+            sample_values.append(location_values[value])
+        else:
+            col_min = raw_df[feature].min()
+            col_max = raw_df[feature].max()
+            sample_values.append((float(value) - col_min) / (col_max - col_min))
 
-    sample_x1 = (float(sample_f1) - min_vals[0]) / ranges[0]
-    sample_x2 = (float(sample_f2) - min_vals[1]) / ranges[1]
-
-    net = weights[0] * sample_x1 + weights[1] * sample_x2
+    net = weights[0] * sample_values[0] + weights[1] * sample_values[1]
     if use_bias:
         net = net + bias
 
